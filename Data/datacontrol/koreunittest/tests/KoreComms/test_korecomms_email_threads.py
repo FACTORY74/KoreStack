@@ -13,7 +13,7 @@ import unittest
 from email.message import EmailMessage
 import os
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 COMMS_ROOT = Path(os.environ["KORESTACK_ROOT"]) / "KoreComms"
@@ -23,7 +23,9 @@ if str(COMMS_ROOT) not in sys.path:
 from app import database
 from app import poller
 from app import server
+from app.email_contract import EmailSchemaError, build_email_received_event, build_email_send_command
 from app.interfaces.classic_email.adapter import ClassicEmailInterface
+from app.interfaces.gmail.adapter import GmailInterface
 
 
 def _close_pool() -> None:
@@ -67,10 +69,11 @@ class KoreCommsEmailThreadTests(unittest.TestCase):
             b"Please tell me more."
         )
 
-        data = ClassicEmailInterface._message_data("imap:1:1", raw)
+        data = ClassicEmailInterface(1, "Mail", {})._message_data("imap:1:1", raw)
 
-        self.assertEqual(data["external_thread_id"], "<original@example.com>")
-        self.assertEqual(data["reply_references"], ["<original@example.com>", "<agent@example.com>", "<agent@example.com>"])
+        self.assertEqual(data["event_type"], "email.received")
+        self.assertEqual(data["message"]["external_thread_id"], "<original@example.com>")
+        self.assertEqual(data["message"]["reply_references"], ["<original@example.com>", "<agent@example.com>", "<agent@example.com>"])
 
     def test_reply_to_is_used_as_sender(self) -> None:
         raw = (
@@ -82,9 +85,91 @@ class KoreCommsEmailThreadTests(unittest.TestCase):
             b"What happened next?"
         )
 
-        data = ClassicEmailInterface._message_data("imap:1:1", raw)
+        data = ClassicEmailInterface(1, "Mail", {})._message_data("imap:1:1", raw)
 
-        self.assertEqual(data["sender"], "reader@example.com")
+        self.assertEqual(data["message"]["sender"], "reader@example.com")
+        self.assertEqual(data["message"]["reply_to"], "reader@example.com")
+
+    def test_inbound_event_exposes_addressing_and_selected_mime_type(self) -> None:
+        raw = (
+            b"From: Sender <sender@example.com>\r\n"
+            b"To: recipient@example.com\r\n"
+            b"Cc: copy@example.com\r\n"
+            b"Subject: Contract fields\r\n"
+            b"Message-ID: <message@example.com>\r\n"
+            b"Content-Type: text/plain; charset=utf-8\r\n\r\n"
+            b"Message body."
+        )
+
+        event = ClassicEmailInterface(7, "Support", {})._message_data("imap:7:1", raw)
+        message = event["message"]
+
+        self.assertEqual(event["source"]["connection_name"], "Support")
+        self.assertEqual(message["from"], "Sender <sender@example.com>")
+        self.assertEqual(message["to"], ["recipient@example.com"])
+        self.assertEqual(message["cc"], ["copy@example.com"])
+        self.assertEqual(message["content_type"], "text/plain")
+        self.assertEqual(message["headers"]["message_id"], "<message@example.com>")
+
+    def test_email_send_command_schema_requires_a_recipient(self) -> None:
+        command = build_email_send_command(
+            recipient="reader@example.com",
+            subject="Hello",
+            content="Message",
+            content_type="text/plain",
+        )
+        self.assertEqual(command["event_type"], "email.send")
+
+        with self.assertRaises(EmailSchemaError):
+            build_email_send_command(
+                recipient="",
+                subject="Hello",
+                content="Message",
+                content_type="text/plain",
+            )
+
+    def test_classic_email_send_validates_before_connecting(self) -> None:
+        adapter = ClassicEmailInterface(1, "Mail", {})
+
+        with self.assertRaises(EmailSchemaError):
+            adapter._send("", "Hello", "Message")
+
+    def test_gmail_poll_emits_the_shared_email_received_event(self) -> None:
+        adapter = GmailInterface(8, "Gmail", {})
+        service = MagicMock()
+        messages = service.users.return_value.messages.return_value
+        messages.list.return_value.execute.return_value = {"messages": [{"id": "gmail-1"}]}
+        messages.get.return_value.execute.return_value = {
+            "id": "gmail-1",
+            "threadId": "thread-1",
+            "payload": {
+                "mimeType": "text/plain",
+                "body": {"data": "SGVsbG8="},
+                "headers": [
+                    {"name": "From", "value": "Person <person@example.com>"},
+                    {"name": "Reply-To", "value": "reply@example.com"},
+                    {"name": "To", "value": "receiver@example.com"},
+                    {"name": "Subject", "value": "Hello"},
+                ],
+            },
+        }
+
+        with patch.object(adapter, "_decrypt_config", return_value={"refresh_token": "token"}), \
+             patch.object(adapter, "_build_service", return_value=service), \
+             patch.object(database, "external_message_exists", return_value=False), \
+             patch.object(database, "interface_update"):
+            events = adapter.poll()
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "email.received")
+        self.assertEqual(events[0]["source"]["connection_type"], "gmail")
+        self.assertEqual(events[0]["message"]["sender"], "reply@example.com")
+        self.assertEqual(events[0]["message"]["to"], ["receiver@example.com"])
+        self.assertEqual(events[0]["message"]["content"], "Hello")
+
+    def test_email_poller_rejects_unrecognized_received_events(self) -> None:
+        with self.assertRaises(EmailSchemaError):
+            poller._forward_message({"id": 1, "type": "classic_email"}, {})
 
     def test_conversation_delivery_form_uses_the_inbound_reply_address(self) -> None:
         interface_id = database.interface_create("classic_email", "Mail", {})
@@ -198,22 +283,44 @@ class KoreCommsEmailThreadTests(unittest.TestCase):
             deliveries             = [{"recipient": "alice@example.com", "message_id": "<newsletter-1@example.com>"}],
         )
         messages = [
-            {
-                "external_message_id": "imap:1:1",
-                "external_thread_id": "<newsletter-1@example.com>",
-                "reply_references": ["<newsletter-1@example.com>"],
-                "sender": "Alice <alice@example.com>",
-                "subject": "Re: Daily newsletter",
-                "content": "Please send more details.",
-            },
-            {
-                "external_message_id": "imap:1:2",
-                "external_thread_id": "<newsletter-1@example.com>",
-                "reply_references": ["<newsletter-1@example.com>"],
-                "sender": "Alice <alice@example.com>",
-                "subject": "Re: Daily newsletter",
-                "content": "And please include pricing.",
-            },
+            build_email_received_event(
+                connection_id=interface_id,
+                connection_name="Mail",
+                connection_type="classic_email",
+                message={
+                    "external_message_id": "imap:1:1",
+                    "external_thread_id": "<newsletter-1@example.com>",
+                    "reply_references": ["<newsletter-1@example.com>"],
+                    "sender": "Alice <alice@example.com>",
+                    "from": "Alice <alice@example.com>",
+                    "reply_to": None,
+                    "to": [],
+                    "cc": [],
+                    "subject": "Re: Daily newsletter",
+                    "content": "Please send more details.",
+                    "content_type": "text/plain",
+                    "headers": {"message_id": None, "in_reply_to": None, "references": None, "date": None},
+                },
+            ),
+            build_email_received_event(
+                connection_id=interface_id,
+                connection_name="Mail",
+                connection_type="classic_email",
+                message={
+                    "external_message_id": "imap:1:2",
+                    "external_thread_id": "<newsletter-1@example.com>",
+                    "reply_references": ["<newsletter-1@example.com>"],
+                    "sender": "Alice <alice@example.com>",
+                    "from": "Alice <alice@example.com>",
+                    "reply_to": None,
+                    "to": [],
+                    "cc": [],
+                    "subject": "Re: Daily newsletter",
+                    "content": "And please include pricing.",
+                    "content_type": "text/plain",
+                    "headers": {"message_id": None, "in_reply_to": None, "references": None, "date": None},
+                },
+            ),
         ]
         appended: list[dict] = []
 

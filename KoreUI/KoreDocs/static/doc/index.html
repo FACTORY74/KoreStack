@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>KoreStack</title>
   <link rel="icon" type="image/svg+xml" href="/ui-elements/assets/icons/dazzle-line/layer-group-svgrepo-com.svg" />
-  <link rel="stylesheet" href="/static/doc/style.css?v=20261011d" />
+  <link rel="stylesheet" href="/static/doc/style.css?v=20261111table" />
   <link rel="stylesheet" href="/static/shared/css/save-status.css?v=20261117a" />
   <link rel="stylesheet" href="/static/shared/css/proposal-panel.css?v=20261117a" />
   <link rel="stylesheet" href="/ui-elements/assets/css/chrome.css?v=20261105d" />
@@ -46,6 +46,15 @@
     <button class="tb-btn" data-insert="hr" type="button" title="Horizontal Rule" aria-label="Insert horizontal rule">
       <span class="kcui-icon kcui-icon--asset" aria-hidden="true" style="--kcui-icon-size:16px;--kcui-icon-url:url(/ui-elements/assets/icons/dazzle-line/minus-svgrepo-com.svg)"></span>
     </button>
+    <span class="tb-sep"></span>
+    <button class="tb-btn" data-insert="table:insert" title="Insert table">Table</button>
+    <button class="tb-btn" data-insert="table:addRowAfter" title="Add row below">+Row</button>
+    <button class="tb-btn" data-insert="table:addColumnAfter" title="Add column after">+Col</button>
+    <button class="tb-btn" data-insert="table:deleteRow" title="Delete row">−Row</button>
+    <button class="tb-btn" data-insert="table:deleteColumn" title="Delete column">−Col</button>
+    <button class="tb-btn" data-insert="table:toggleHeaderRow" title="Toggle title row">Header</button>
+    <button class="tb-btn" data-insert="table:grid" title="Toggle table grid">Grid</button>
+    <button class="tb-btn" data-insert="table:deleteTable" title="Delete table">−Table</button>
     <button id="btn-toggle-sidebar" class="kcui-tag kcui-tag--dim" type="button"
             aria-controls="right-sidebar" aria-pressed="true">details</button>
   </div>
@@ -81,6 +90,6 @@
     <span id="status-counts"></span>
   </div>
 
-  <script type="module" src="/static/doc/js/main.js?v=20261117a"></script>
+  <script type="module" src="/static/doc/js/main.js?v=20261117tableparagraph"></script>
 </body>
 </html>

@@ -226,8 +226,7 @@ function _renderList() {
   _summary.textContent   = `${sorted.length.toLocaleString()} ${sorted.length === 1 ? 'file' : 'files'}${_searchMode ? ' found' : ''}`;
 
   _tbody.innerHTML = sorted.map(f => {
-    const meta  = typeof f.metadata === 'object' ? f.metadata : {};
-    const title = meta.title || f.name.replace(/\.[^.]+$/, '');
+    const title = f.name;
     const isSelected = _selectedFileIds.has(f.id);
     const isCurrent = isSelected && f.id === _fileCurrentId;
     const singleActions = `${_actionBtn('open', 'Open', OPEN_SVG)}
@@ -474,11 +473,8 @@ function _startRename(row) {
         name: newName,
         expected_revision: expectedRevision,
       });
-      row.dataset.name = updated.name;
-      row.dataset.revision = String(updated.revision ?? row.dataset.revision ?? '');
       _renameOpenTabs(parseInt(row.dataset.id, 10), updated.name);
-      const meta = typeof updated.metadata === 'object' ? updated.metadata : {};
-      td.textContent = _esc(meta.title || newBase);
+      await _refreshFileView();
     } catch (err) {
       await dialogs.alert('Rename Failed', err.message || 'Rename failed.');
       await _refreshRow(row);

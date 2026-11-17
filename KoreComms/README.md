@@ -36,6 +36,15 @@ KoreComms owns transport adapters and delivery state, while KoreChat remains the
 - outbound delivery happens only after the agent writes a draft and marks it ready
 - browser pages exist for operators to inspect conversations, configure interfaces, and inject manual messages
 
+### Email message contracts
+
+Classic Email and Gmail use versioned JSON Schema contracts shared by their adapters and the KoreComms poller:
+
+- [`schemas/email.received.schema.json`](schemas/email.received.schema.json) describes the `email.received` event. Its `source` identifies the connection; `message` includes sender, From/Reply-To, To/Cc, subject, normalized body, MIME content type, reply references, and a small allow-list of useful headers.
+- [`schemas/email.send.schema.json`](schemas/email.send.schema.json) describes the `email.send` command used by email adapters, including recipient, subject, content, content type, and optional reply/thread references.
+
+The adapters emit or consume these contracts, and KoreComms validates them at the inbound poller and outbound email adapter boundaries. The public `POST /api/send` request remains backward-compatible (`interface_id`, `recipient` or `distribution_list_id`, `subject`, and `content`); KoreComms resolves distribution-list recipients and maps each delivery to an `email.send` command. The message body is normalized to plain text on receipt; `content_type` records the selected MIME body type. Raw, unfiltered message headers are not exposed.
+
 
 ## Install and configuration
 

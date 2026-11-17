@@ -1,1 +1,0 @@
-"""KoreProject ticket tracking."""

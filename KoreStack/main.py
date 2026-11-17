@@ -186,9 +186,6 @@ SERVICE_META: dict[str, dict[str, object]] = {
     "koreunittest": {
         "label": "KoreUnitTest", "cwd": SUITE_ROOT / "KoreUnitTest", "script": "main.py", "url_suffix": "/ui", "health_suffix": "/status", "description": "Build-keyed unit tests, one Python file per test, with results and output logs.",
     },
-    "koreproject": {
-        "label": "KoreProject", "cwd": SUITE_ROOT / "KoreProject", "script": "main.py", "url_suffix": "/ui", "health_suffix": "/status", "description": "Linked requirements and design, hierarchical tickets, and lifecycle boards.",
-    },
     "koreagentnetwork": {
         "label": "KoreAgentNetwork", "cwd": SUITE_ROOT / "KoreAgentNetwork", "script": "main.py", "url_suffix": "/ui", "health_suffix": "/status", "description": "Visual processing networks with named data ports and bounded Python execution.",
     },
@@ -206,7 +203,6 @@ SERVICE_ICON_KEYS: dict[str, str] = {
     "koretest2":         "koretest",
     "koreunittest":      "koretest",
     "koreagentnetwork":  "koreagent",
-    "koreproject":       "koreproject",
 }
 
 
@@ -421,7 +417,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--services",
         default="all",
-        help="Comma-separated service list. Valid values: all, korechat, koreagent, koredatagateway, koredocs, korecode, korecomms, koreliveweb, korecron, koretest2, koreunittest, koreagentnetwork, koreproject.",
+        help="Comma-separated service list. Valid values: all, korechat, koreagent, koredatagateway, koredocs, korecode, korecomms, koreliveweb, korecron, koretest2, koreunittest, koreagentnetwork.",
     )
     parser.add_argument("--host", default=None, help="KoreStack landing page bind address.")
     parser.add_argument("--ui-port", type=int, default=None, help="KoreStack landing page port.")
@@ -445,7 +441,6 @@ def resolve_services(raw: str, services: dict[str, ServiceSpec]) -> list[Service
             "koreunittest",
             "korecron",
             "koreagentnetwork",
-            "koreproject",
         )
         return [services[key] for key in preferred_order if key in services]
 

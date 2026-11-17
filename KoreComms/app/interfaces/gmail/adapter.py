@@ -35,8 +35,10 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import time
 from email.mime.text import MIMEText
+from email.utils import getaddresses, parseaddr
 
 import google.auth.transport.requests
 import google.oauth2.credentials
@@ -44,12 +46,14 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from app import crypto, database as db
+from app.email_contract import build_email_received_event, build_email_send_command
 from app.interfaces.common.base import BaseInterface
 from app.interfaces.gmail.oauth import SCOPES
 
 logger = logging.getLogger(__name__)
 
 _SECRET_KEYS = ("client_id", "client_secret", "refresh_token")
+_MESSAGE_ID_RE = re.compile(r"<[^>]+>")
 
 
 class GmailInterface(BaseInterface):
@@ -138,18 +142,42 @@ class GmailInterface(BaseInterface):
 
             headers = gm_msg.get("payload", {}).get("headers", [])
             subject = self._header_value(headers, "Subject") or "(no subject)"
-            sender = self._header_value(headers, "From")
+            from_header = self._header_value(headers, "From")
+            reply_to = self._header_value(headers, "Reply-To") or None
+            sender = reply_to if reply_to and parseaddr(reply_to)[1] else from_header
             thread_id = gm_msg.get("threadId", gm_id)
             body = self._extract_body(gm_msg.get("payload", {}))
-
-            messages.append({
-                "external_message_id": gm_id,
-                "external_thread_id": thread_id,
-                "sender": sender,
-                "subject": subject,
-                "content": body,
-                "channel_type": "email",
-            })
+            header_values = {
+                name: self._header_value(headers, name) or None
+                for name in ("Message-ID", "In-Reply-To", "References", "Date")
+            }
+            references = _MESSAGE_ID_RE.findall(
+                f"{header_values['References'] or ''} {header_values['In-Reply-To'] or ''}"
+            )
+            messages.append(build_email_received_event(
+                connection_id=self.interface_id,
+                connection_name=self.name,
+                connection_type="gmail",
+                message={
+                    "external_message_id": gm_id,
+                    "external_thread_id": thread_id,
+                    "reply_references": references,
+                    "sender": sender,
+                    "from": from_header,
+                    "reply_to": reply_to,
+                    "to": [address for _, address in getaddresses([self._header_value(headers, "To")]) if address],
+                    "cc": [address for _, address in getaddresses([self._header_value(headers, "Cc")]) if address],
+                    "subject": subject,
+                    "content": body,
+                    "content_type": "text/plain",
+                    "headers": {
+                        "message_id": header_values["Message-ID"],
+                        "in_reply_to": header_values["In-Reply-To"],
+                        "references": header_values["References"],
+                        "date": header_values["Date"],
+                    },
+                },
+            ))
 
         raw_cfg = json.loads(self.config.get("config_json", "{}"))
         raw_cfg["last_poll_epoch"] = int(time.time())
@@ -170,14 +198,22 @@ class GmailInterface(BaseInterface):
         to = last_msg["sender_display"] if last_msg else ""
         subject = conv.get("subject", "") if conv else ""
 
-        mime = MIMEText(content)
-        mime["To"] = to
-        mime["Subject"] = f"Re: {subject}" if not subject.startswith("Re:") else subject
+        command = build_email_send_command(
+            recipient=to,
+            subject=f"Re: {subject}" if not subject.startswith("Re:") else subject,
+            content=content,
+            content_type="text/plain",
+            thread_id=thread_id,
+        )
+        message_data = command["message"]
+        mime = MIMEText(message_data["content"])
+        mime["To"] = message_data["recipient"]
+        mime["Subject"] = message_data["subject"]
         raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
 
         body: dict = {"raw": raw}
-        if thread_id:
-            body["threadId"] = thread_id
+        if message_data.get("thread_id"):
+            body["threadId"] = message_data["thread_id"]
 
         try:
             service = self._build_service()
@@ -186,9 +222,16 @@ class GmailInterface(BaseInterface):
             raise RuntimeError(f"Gmail send failed: {exc}") from exc
 
     def send_new(self, recipient: str, subject: str, content: str) -> dict:
-        mime = MIMEText(content)
-        mime["To"] = recipient
-        mime["Subject"] = subject
+        command = build_email_send_command(
+            recipient=recipient,
+            subject=subject,
+            content=content,
+            content_type="text/plain",
+        )
+        message_data = command["message"]
+        mime = MIMEText(message_data["content"])
+        mime["To"] = message_data["recipient"]
+        mime["Subject"] = message_data["subject"]
         raw = base64.urlsafe_b64encode(mime.as_bytes()).decode()
 
         try:

@@ -3,8 +3,8 @@
  * Wires together editor, toolbar, properties panel, file I/O, and the menu bar.
  */
 
-import * as editor     from './editor.js?v=20261117a';
-import * as toolbar    from './toolbar.js?v=20261011b';
+import * as editor     from './editor.js?v=20261117tableparagraph';
+import * as toolbar    from './toolbar.js?v=20261117tableparagraph';
 import * as properties from './properties.js?v=20261011b';
 import * as fileio     from './fileio.js?v=20261117a';
 import { trackAppTab, initAppMenuEvents } from '/ui-elements/assets/js/chrome.js';

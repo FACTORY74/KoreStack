@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.korestack.local/korecomms/email.send/1.0.0",
+  "title": "KoreComms email.send command",
+  "type": "object",
+  "required": ["event_type", "schema_version", "message"],
+  "properties": {
+    "event_type": {
+      "const": "email.send"
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "message": {
+      "type": "object",
+      "required": ["recipient", "subject", "content", "content_type"],
+      "properties": {
+        "recipient": {
+          "type": "string",
+          "minLength": 1
+        },
+        "subject": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "content_type": {
+          "enum": ["text/plain", "text/html"]
+        },
+        "in_reply_to": {
+          "type": ["string", "null"]
+        },
+        "thread_id": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

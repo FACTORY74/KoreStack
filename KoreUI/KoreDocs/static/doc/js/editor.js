@@ -6,7 +6,7 @@
  */
 
 import { Schema }        from 'https://esm.sh/prosemirror-model@1';
-import { EditorState }   from 'https://esm.sh/prosemirror-state@1';
+import { EditorState, Plugin, TextSelection } from 'https://esm.sh/prosemirror-state@1';
 import { EditorView }    from 'https://esm.sh/prosemirror-view@1';
 import { history, undo, redo } from 'https://esm.sh/prosemirror-history@1';
 import { keymap }        from 'https://esm.sh/prosemirror-keymap@1';
@@ -17,6 +17,8 @@ import {
 } from 'https://esm.sh/prosemirror-commands@1';
 import { wrapInList, splitListItem, liftListItem, sinkListItem }
   from 'https://esm.sh/prosemirror-schema-list@1';
+import { tableNodes, tableEditing, columnResizing, goToNextCell, addRowAfter, addColumnAfter, deleteRow, deleteColumn, deleteTable, toggleHeaderRow }
+  from 'https://esm.sh/prosemirror-tables@1';
 import {
   MarkdownParser,
   schema as mdSchema,
@@ -38,7 +40,10 @@ const _nodes = mdSchema.spec.nodes.update('paragraph', {
     return ['p', indent ? { 'data-indent': String(indent) } : {}, 0];
   },
 });
-export const schema = new Schema({ nodes: _nodes, marks: mdSchema.spec.marks });
+const _tableNodes = tableNodes({ tableGroup: 'block', cellContent: 'block+' });
+_tableNodes.table.attrs = { ..._tableNodes.table.attrs, grid: { default: true } };
+_tableNodes.table.toDOM = node => ['table', { 'data-grid': String(node.attrs.grid) }, ['tbody', 0]];
+export const schema = new Schema({ nodes: _nodes.append(_tableNodes), marks: mdSchema.spec.marks });
 
 // Reuse the same markdown-it tokenizer and token map; swap in our schema.
 const _parser = new MarkdownParser(
@@ -90,6 +95,10 @@ export function getBodyValue() {
 export function serializeMarkdown(doc) {
   const blocks = [];
   doc.forEach(node => {
+    if (node.type === schema.nodes.table) {
+      blocks.push(`<!-- koredocs-table:${encodeURIComponent(JSON.stringify(node.toJSON()))} -->`);
+      return;
+    }
     const blockDoc = schema.topNodeType.create(null, node);
     let markdown = defaultMarkdownSerializer.serialize(blockDoc);
     if (node.type === schema.nodes.paragraph && node.attrs.indent > 0) {
@@ -101,6 +110,43 @@ export function serializeMarkdown(doc) {
 }
 
 export function parseMarkdown(markdown) {
+  const tablePattern = /^<!-- koredocs-table:([^\r\n]*?) -->[ \t]*$/gm;
+  const nodes = [];
+  let cursor = 0;
+  let match;
+  while ((match = tablePattern.exec(markdown)) !== null) {
+    const before = markdown.slice(cursor, match.index).trim();
+    if (before) _parseTextMarkdown(before).forEach(node => nodes.push(node));
+    try {
+      const table = schema.nodeFromJSON(JSON.parse(decodeURIComponent(match[1])));
+      table.check();
+      if (table.type !== schema.nodes.table) throw new Error('Not a table');
+      nodes.push(table);
+    } catch {
+      _parseTextMarkdown(match[0]).forEach(node => nodes.push(node));
+    }
+    cursor = tablePattern.lastIndex;
+  }
+  const after = markdown.slice(cursor).trim();
+  if (after) _parseTextMarkdown(after).forEach(node => nodes.push(node));
+  const normalizedNodes = _appendParagraphsAfterTables(nodes);
+  return normalizedNodes.length
+    ? schema.topNodeType.create(null, normalizedNodes)
+    : schema.topNodeType.createAndFill();
+}
+
+function _appendParagraphsAfterTables(nodes) {
+  const result = [];
+  nodes.forEach((node, index) => {
+    result.push(node);
+    if (node.type === schema.nodes.table && nodes[index + 1]?.type !== schema.nodes.paragraph) {
+      result.push(schema.nodes.paragraph.create());
+    }
+  });
+  return result;
+}
+
+function _parseTextMarkdown(markdown) {
   const indentMarkers = [];
   const markerPattern = /^<!-- koredocs-indent:(\d+) -->[ \t]*\r?\n/gm;
   let body = '';
@@ -132,6 +178,41 @@ export function parseMarkdown(markdown) {
     );
   });
   return schema.topNodeType.create(null, nodes);
+}
+
+export function tableCommand(name) {
+  if (!_view) return;
+  const commands = { addRowAfter, addColumnAfter, deleteRow, deleteColumn, deleteTable, toggleHeaderRow };
+  if (name === 'insert') {
+    const cell = type => type.createAndFill();
+    const row = type => schema.nodes.table_row.create(null, Array.from({ length: 3 }, () => cell(type)));
+    const table = schema.nodes.table.create(null, [row(schema.nodes.table_header), row(schema.nodes.table_cell), row(schema.nodes.table_cell)]);
+    const state = _view.state;
+    let tr = state.tr.replaceSelectionWith(table);
+    let insertedPos = -1;
+    tr.doc.descendants((node, pos) => {
+      if (node === table) {
+        insertedPos = pos;
+        return false;
+      }
+    });
+    if (insertedPos < 0) throw new Error('Inserted table is missing from the document.');
+    const afterTable = insertedPos + table.nodeSize;
+    if (tr.doc.nodeAt(afterTable)?.type !== schema.nodes.paragraph) {
+      tr = tr.insert(afterTable, schema.nodes.paragraph.create());
+    }
+    _view.dispatch(tr.setSelection(TextSelection.create(tr.doc, afterTable + 1)).scrollIntoView());
+  } else if (name === 'grid') {
+    const { $from } = _view.state.selection;
+    for (let depth = $from.depth; depth > 0; depth--) {
+      const node = $from.node(depth);
+      if (node.type === schema.nodes.table) {
+        _view.dispatch(_view.state.tr.setNodeMarkup($from.before(depth), null, { ...node.attrs, grid: !node.attrs.grid }));
+        break;
+      }
+    }
+  } else if (commands[name]) commands[name](_view.state, _view.dispatch);
+  _view.focus();
 }
 
 /**
@@ -244,6 +325,27 @@ function _plugins() {
   const { list_item } = schema.nodes;
   return [
     history(),
+    columnResizing(),
+    tableEditing(),
+    new Plugin({
+      appendTransaction(transactions, _oldState, newState) {
+        if (!transactions.some(transaction => transaction.docChanged)) return null;
+        const insertPositions = [];
+        newState.doc.forEach((node, pos, index) => {
+          if (node.type === schema.nodes.table
+            && (index + 1 === newState.doc.childCount
+              || newState.doc.child(index + 1).type !== schema.nodes.paragraph)) {
+            insertPositions.push(pos + node.nodeSize);
+          }
+        });
+        if (!insertPositions.length) return null;
+        let tr = newState.tr;
+        for (const pos of insertPositions.reverse()) {
+          tr = tr.insert(pos, schema.nodes.paragraph.create());
+        }
+        return tr;
+      },
+    }),
     keymap({
       'Mod-z':       (s, d) => undo(s, d),
       'Mod-y':       (s, d) => redo(s, d),
@@ -258,10 +360,12 @@ function _plugins() {
         splitBlockKeepMarks,
       ),
       'Tab': chainCommands(
+        goToNextCell(1),
         (s, d) => sinkListItem(list_item)(s, d),
         indentBlock,
       ),
       'Shift-Tab': chainCommands(
+        goToNextCell(-1),
         (s, d) => liftListItem(list_item)(s, d),
         outdentBlock,
       ),

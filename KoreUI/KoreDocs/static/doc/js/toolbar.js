@@ -4,7 +4,7 @@
 
 import { toggleMark, setBlockType }         from 'https://esm.sh/prosemirror-commands@1';
 import { wrapInList, liftListItem }         from 'https://esm.sh/prosemirror-schema-list@1';
-import { schema, getView, indentBlock, outdentBlock } from './editor.js?v=20261011b';
+import { schema, getView, indentBlock, outdentBlock, tableCommand } from './editor.js?v=20261117tableparagraph';
 
 export function init() {
   document.getElementById('toolbar').addEventListener('mousedown', e => {
@@ -17,6 +17,7 @@ export function init() {
 }
 
 export function insert(type) {
+  if (type.startsWith('table:')) { tableCommand(type.slice(6)); return; }
   const view = getView();
   if (!view) return;
   const run = cmd => cmd(view.state, view.dispatch, view);

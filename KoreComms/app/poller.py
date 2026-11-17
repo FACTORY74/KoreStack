@@ -45,6 +45,7 @@ from email.utils import parseaddr
 
 from app import database as db, kc_client
 from app.config import cfg
+from app.email_contract import validate_email_received
 from app.interfaces.common.registry import build_adapter
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,8 @@ def _resolve_kc_conversation(local_conv: dict) -> dict | None:
 
 def _forward_message(iface_row: dict, msg: dict) -> None:
     """Store routing metadata locally and push the message to KoreChat."""
+    if iface_row["type"] in {"classic_email", "gmail"}:
+        msg = validate_email_received(msg)["message"]
     ext_msg_id    = msg["external_message_id"]
     ext_thread_id = msg["external_thread_id"]
     delivery = db.email_delivery_find_by_references(

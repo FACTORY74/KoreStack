@@ -40,13 +40,18 @@ class BaseInterface(ABC):
     def poll(self) -> list[dict]:
         """Fetch new inbound messages from this channel.
 
-        Returns a list of message dicts; each must contain:
+        Returns a list of message dicts. Non-email adapters return routing
+        records containing:
             external_message_id  str       – stable, unique ID for de-duplication
             external_thread_id   str       – groups messages into a conversation
             sender               str       – display name / address
             subject              str|None  – subject line if applicable
             content              str       – plain-text body
             channel_type         str       – e.g. "email", "manual"
+
+        Email adapters return the versioned ``email.received`` event defined
+        by ``schemas/email.received.schema.json``. The poller validates and
+        unwraps its ``message`` object before applying the routing contract.
 
         Must be idempotent (safe to call repeatedly).
         Must NOT write to the database directly.

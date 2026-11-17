@@ -12,7 +12,6 @@ const SERVICE_KEY_BY_SLUG = {
   koretest2: 'koretest',
   koreunittest: 'koretest',
   koreagentnetwork: 'koreagentnetwork',
-  koreproject: 'koreproject',
 };
 
 const STATE_COLOR = {

@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.korestack.local/korecomms/email.received/1.0.0",
+  "title": "KoreComms email.received event",
+  "type": "object",
+  "required": ["event_type", "schema_version", "source", "message"],
+  "properties": {
+    "event_type": {
+      "const": "email.received"
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "source": {
+      "type": "object",
+      "required": ["service", "connection_id", "connection_name", "connection_type"],
+      "properties": {
+        "service": {
+          "const": "KoreComms"
+        },
+        "connection_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "connection_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "connection_type": {
+          "enum": ["classic_email", "gmail"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "message": {
+      "type": "object",
+      "required": [
+        "external_message_id",
+        "external_thread_id",
+        "reply_references",
+        "sender",
+        "from",
+        "reply_to",
+        "to",
+        "cc",
+        "subject",
+        "content",
+        "content_type",
+        "headers"
+      ],
+      "properties": {
+        "external_message_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "external_thread_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reply_references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sender": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "reply_to": {
+          "type": ["string", "null"]
+        },
+        "to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cc": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subject": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "headers": {
+          "type": "object",
+          "required": ["message_id", "in_reply_to", "references", "date"],
+          "properties": {
+            "message_id": {
+              "type": ["string", "null"]
+            },
+            "in_reply_to": {
+              "type": ["string", "null"]
+            },
+            "references": {
+              "type": ["string", "null"]
+            },
+            "date": {
+              "type": ["string", "null"]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

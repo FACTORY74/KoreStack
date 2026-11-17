@@ -5,7 +5,7 @@
  * and a live heading outline (document map) for navigating the document.
  */
 
-import { parseFrontmatter } from './editor.js?v=20261011b';
+import { parseFrontmatter } from './editor.js?v=20261117tableparagraph';
 
 const _panel = document.getElementById('props-content');
 const _map   = document.getElementById('map-content');

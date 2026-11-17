@@ -37,9 +37,10 @@ import ssl
 import time
 from email.header import decode_header, make_header
 from email.message import EmailMessage, Message
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 
 from app import crypto, database as db
+from app.email_contract import build_email_received_event, build_email_send_command
 from app.interfaces.common.base import BaseInterface
 
 logger = logging.getLogger(__name__)
@@ -84,18 +85,23 @@ class ClassicEmailInterface(BaseInterface):
         return html.unescape(text).strip()
 
     @classmethod
-    def _body(cls, message: Message) -> str:
+    def _body_with_type(cls, message: Message) -> tuple[str, str]:
         if message.is_multipart():
             for part in message.walk():
                 if part.get_content_type() == "text/plain" and not part.get_filename():
-                    return cls._body(part)
+                    return cls._body_with_type(part)
             for part in message.walk():
                 if part.get_content_type() == "text/html" and not part.get_filename():
-                    return cls._html_to_text(cls._body(part))
-            return ""
+                    return cls._body_with_type(part)
+            return "", "text/plain"
         payload = message.get_payload(decode=True) or b""
         content = payload.decode(message.get_content_charset() or "utf-8", errors="replace").strip()
-        return cls._html_to_text(content) if message.get_content_type() == "text/html" else content
+        content_type = message.get_content_type()
+        return (cls._html_to_text(content) if content_type == "text/html" else content), content_type
+
+    @classmethod
+    def _body(cls, message: Message) -> str:
+        return cls._body_with_type(message)[0]
 
     @classmethod
     def _reply_sender(cls, message: Message) -> str:
@@ -106,24 +112,48 @@ class ClassicEmailInterface(BaseInterface):
         return cls._text(message.get("From"))
 
     @staticmethod
-    def _message_data(message_id: str, raw: bytes) -> dict:
-        message = email.message_from_bytes(raw)
-        sender = ClassicEmailInterface._reply_sender(message)
+    def _addresses(value: str) -> list[str]:
+        return [address for _, address in getaddresses([value]) if address]
+
+    def _message_data(self, message_id: str, raw: bytes) -> dict:
+        email_message = email.message_from_bytes(raw)
+        sender = self._reply_sender(email_message)
         references = []
         for header_name in ("References", "In-Reply-To"):
-            references.extend(_MESSAGE_ID_RE.findall(message.get(header_name, "")))
+            references.extend(_MESSAGE_ID_RE.findall(email_message.get(header_name, "")))
         # The oldest referenced message identifies the email thread.  A reply
         # may list several IDs; retain them all for newsletter delivery lookup.
-        external_thread_id = references[0] if references else (message.get("Message-ID") or message_id)
-        return {
-            "external_message_id": message_id,
-            "external_thread_id": external_thread_id,
-            "reply_references": references,
-            "sender": sender,
-            "subject": ClassicEmailInterface._text(message.get("Subject")) or "(no subject)",
-            "content": ClassicEmailInterface._body(message),
-            "channel_type": "email",
+        message_header_id = email_message.get("Message-ID")
+        external_thread_id = references[0] if references else (message_header_id or message_id)
+        content, content_type = self._body_with_type(email_message)
+        decoded_headers = {
+            name: self._text(email_message.get(name)) if email_message.get(name) else None
+            for name in ("Message-ID", "In-Reply-To", "References", "Date")
         }
+        return build_email_received_event(
+            connection_id=self.interface_id,
+            connection_name=self.name,
+            connection_type="classic_email",
+            message={
+                "external_message_id": message_id,
+                "external_thread_id": external_thread_id,
+                "reply_references": references,
+                "sender": sender,
+                "from": self._text(email_message.get("From")),
+                "reply_to": self._text(email_message.get("Reply-To")) or None,
+                "to": self._addresses(self._text(email_message.get("To"))),
+                "cc": self._addresses(self._text(email_message.get("Cc"))),
+                "subject": self._text(email_message.get("Subject")) or "(no subject)",
+                "content": content,
+                "content_type": content_type,
+                "headers": {
+                    "message_id": decoded_headers["Message-ID"],
+                    "in_reply_to": decoded_headers["In-Reply-To"],
+                    "references": decoded_headers["References"],
+                    "date": decoded_headers["Date"],
+                },
+            },
+        )
 
     @classmethod
     def _is_self_sent(cls, message: Message, cfg: dict) -> bool:
@@ -218,23 +248,31 @@ class ClassicEmailInterface(BaseInterface):
             return []
 
     def _send(self, recipient: str, subject: str, content: str, *, in_reply_to: str = "") -> str:
+        command = build_email_send_command(
+            recipient=recipient,
+            subject=subject,
+            content=content,
+            content_type="text/html" if self._looks_like_html(content) else "text/plain",
+            in_reply_to=in_reply_to or None,
+        )
+        message_data = command["message"]
         cfg = self._config()
         required = ("outgoing_host", "outgoing_port", "outgoing_username", "outgoing_password")
         if not all(cfg.get(key) for key in required):
             raise RuntimeError("Classic email interface is missing SMTP settings")
         message = EmailMessage()
         message["From"] = cfg.get("outgoing_from") or cfg["outgoing_username"]
-        message["To"] = recipient
-        message["Subject"] = subject
+        message["To"] = message_data["recipient"]
+        message["Subject"] = message_data["subject"]
         message["X-KoreComms-Auto-Reply"] = "1"
-        if in_reply_to:
-            message["In-Reply-To"] = in_reply_to
-            message["References"] = in_reply_to
-        if self._looks_like_html(content):
-            message.set_content(self._html_to_text(content))
-            message.add_alternative(content, subtype="html")
+        if message_data.get("in_reply_to"):
+            message["In-Reply-To"] = message_data["in_reply_to"]
+            message["References"] = message_data["in_reply_to"]
+        if message_data["content_type"] == "text/html":
+            message.set_content(self._html_to_text(message_data["content"]))
+            message.add_alternative(message_data["content"], subtype="html")
         else:
-            message.set_content(content)
+            message.set_content(message_data["content"])
         context = ssl.create_default_context()
         if cfg.get("outgoing_security") == "ssl":
             client = smtplib.SMTP_SSL(cfg["outgoing_host"], int(cfg["outgoing_port"]), context=context, timeout=30)
